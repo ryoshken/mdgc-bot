@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, PermissionsBitField, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelType } from 'discord.js';
+import { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, PermissionsBitField, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelType, ModalBuilder, TextInputBuilder, TextInputStyle, InteractionType } from 'discord.js';
 import { readConfig, writeConfig, getStatusOptions, getPayment, setPayment, getTemplate, setTemplate } from './config/store.js';
 import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior, getVoiceConnection } from '@discordjs/voice';
 import ytdl from 'ytdl-core';
@@ -61,7 +61,7 @@ client.once('clientReady', () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    if (!interaction.isChatInputCommand() && !interaction.isStringSelectMenu() && !interaction.isButton()) return;
+    if (!interaction.isChatInputCommand() && !interaction.isStringSelectMenu() && !interaction.isButton() && interaction.type !== InteractionType.ModalSubmit) return;
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'order') {
       const buyer = interaction.options.getUser('buyer');
@@ -262,11 +262,34 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (interaction.isButton() && interaction.customId === 'ticket_order') {
+    const modal = new ModalBuilder().setCustomId('modal_order').setTitle('Order Details');
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('product').setLabel('Product Name').setStyle(TextInputStyle.Short).setRequired(true)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amount').setLabel('Amount/Price').setStyle(TextInputStyle.Short).setRequired(true)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('payment').setLabel('Payment Method (GCash, etc)').setStyle(TextInputStyle.Short).setRequired(true)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('quantity').setLabel('Quantity').setStyle(TextInputStyle.Short).setRequired(false))
+    );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === 'ticket_report') {
+    const modal = new ModalBuilder().setCustomId('modal_report').setTitle('Report User');
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('user').setLabel('Username/ID to Report').setStyle(TextInputStyle.Short).setRequired(true)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('reason').setLabel('Reason').setStyle(TextInputStyle.Paragraph).setRequired(true))
+    );
+    await interaction.showModal(modal);
+    return;
+  }
+  
   if (interaction.isButton() && interaction.customId.startsWith('ticket_')) {
+    // Fallback for 'ticket_other' or any generic one
     const type = interaction.customId.replace('ticket_', '');
-    const channelName = `${type}-${interaction.user.username}`;
+    // ... same logic as before for generic tickets ...
+    const channelName = `${interaction.user.username.replace(/[^a-z0-9]/gi, '').toLowerCase()}-${type}-${Math.floor(10000 + Math.random() * 90000)}`;
     
-    // Check if channel already exists (simple check)
     const existing = interaction.guild.channels.cache.find(c => c.name === channelName);
     if (existing) {
         await interaction.reply({ content: `You already have a ticket: ${existing}`, ephemeral: true });
@@ -293,6 +316,96 @@ client.on('interactionCreate', async (interaction) => {
 
     await channel.send({ content: `${interaction.user}`, embeds: [embed], components: [row] });
     await interaction.reply({ content: `Ticket created: ${channel}`, ephemeral: true });
+    return;
+  }
+
+  if (interaction.type === InteractionType.ModalSubmit && interaction.customId === 'modal_order') {
+    const product = interaction.fields.getTextInputValue('product');
+    const amount = interaction.fields.getTextInputValue('amount');
+    const payment = interaction.fields.getTextInputValue('payment');
+    const quantity = parseInt(interaction.fields.getTextInputValue('quantity') || '1');
+    
+    const channelName = `${interaction.user.username.replace(/[^a-z0-9]/gi, '').toLowerCase()}-order-${Math.floor(10000 + Math.random() * 90000)}`;
+    
+    const channel = await interaction.guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+            { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+            { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
+        ]
+    });
+
+    const embed = makeOrderEmbed({
+      buyer: interaction.user,
+      handler: interaction.user, // Initially assigned to self or waiting
+      product, amount, payment, quantity,
+      statusLabel: 'waiting'
+    });
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('confirm_order_queue').setLabel('Confirm & Send to Queue').setStyle(ButtonStyle.Success).setEmoji('✅'),
+      new ButtonBuilder().setCustomId('close_ticket').setLabel('Close Ticket').setStyle(ButtonStyle.Danger)
+    );
+
+    await channel.send({ content: `${interaction.user} Order Draft:`, embeds: [embed], components: [row] });
+    await interaction.reply({ content: `Order ticket created: ${channel}`, ephemeral: true });
+    return;
+  }
+
+  if (interaction.type === InteractionType.ModalSubmit && interaction.customId === 'modal_report') {
+    const user = interaction.fields.getTextInputValue('user');
+    const reason = interaction.fields.getTextInputValue('reason');
+    
+    const channelName = `${interaction.user.username.replace(/[^a-z0-9]/gi, '').toLowerCase()}-report-${Math.floor(10000 + Math.random() * 90000)}`;
+    
+    const channel = await interaction.guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+            { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+            { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
+        ]
+    });
+
+    const embed = new EmbedBuilder()
+      .setColor(0xFF0000)
+      .setTitle('Report Ticket')
+      .addFields(
+        { name: 'Reporter', value: `${interaction.user}`, inline: true },
+        { name: 'Reported User', value: user, inline: true },
+        { name: 'Reason', value: reason }
+      )
+      .setDescription('Please upload any proof (screenshots) here.');
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('close_ticket').setLabel('Close Ticket').setStyle(ButtonStyle.Danger)
+    );
+
+    await channel.send({ content: `${interaction.user}`, embeds: [embed], components: [row] });
+    await interaction.reply({ content: `Report ticket created: ${channel}`, ephemeral: true });
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === 'confirm_order_queue') {
+    if (ORDER_CHANNEL_ID) {
+      const channel = await interaction.client.channels.fetch(ORDER_CHANNEL_ID).catch(() => null);
+      if (channel) {
+        // Re-create embed to ensure it's fresh
+        const oldEmbed = interaction.message.embeds[0];
+        const newEmbed = new EmbedBuilder(oldEmbed.toJSON());
+        
+        const sent = await channel.send({ embeds: [newEmbed], components: [makeStatusSelect('noted')] });
+        await interaction.reply({ content: `Order sent to queue: ${sent.url}`, ephemeral: true });
+        
+        // Disable button
+        const row = ActionRowBuilder.from(interaction.message.components[0]);
+        row.components[0].setDisabled(true).setLabel('Sent to Queue');
+        await interaction.message.edit({ components: [row] });
+        return;
+      }
+    }
+    await interaction.reply({ content: 'Order Queue Channel not configured.', ephemeral: true });
     return;
   }
 
