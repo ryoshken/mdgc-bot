@@ -110,11 +110,17 @@ const shop = new SlashCommandBuilder().setName('shop').setDescription('Start pur
 const ticket = new SlashCommandBuilder().setName('ticket').setDescription('Create an order ticket')
   .addStringOption(o => o.setName('subject').setDescription('Ticket subject').setRequired(true));
 const verify = new SlashCommandBuilder().setName('verify').setDescription('Send a message with an OAuth verify link button');
+const report = new SlashCommandBuilder().setName('report').setDescription('Report a user')
+  .addUserOption(o => o.setName('user').setDescription('User to report').setRequired(true))
+  .addStringOption(o => o.setName('reason').setDescription('Reason').setRequired(true))
+  .addAttachmentOption(o => o.setName('proof').setDescription('Proof').setRequired(false));
+const backup = new SlashCommandBuilder().setName('backup').setDescription('Backup data (Admin only)');
 
 await rest.put(Routes.applicationGuildCommands(APP_ID, GUILD_ID), { body: [
   order.toJSON(), edit.toJSON(), payment.toJSON(), template.toJSON(),
   inquire.toJSON(), join.toJSON(), joinVoice.toJSON(), leaveVoice.toJSON(),
   play.toJSON(), stop.toJSON(), rules.toJSON(), say.toJSON(), sayModal.toJSON(),
-  setupTicketing.toJSON(), shop.toJSON(), ticket.toJSON(), verify.toJSON()
+  setupTicketing.toJSON(), shop.toJSON(), ticket.toJSON(), verify.toJSON(),
+  report.toJSON(), backup.toJSON()
 ] });
 console.log('Commands registered.');

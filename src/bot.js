@@ -1,8 +1,10 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, PermissionsBitField } from 'discord.js';
+import { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, PermissionsBitField, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelType } from 'discord.js';
 import { readConfig, writeConfig, getStatusOptions, getPayment, setPayment, getTemplate, setTemplate } from './config/store.js';
 import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior, getVoiceConnection } from '@discordjs/voice';
 import ytdl from 'ytdl-core';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 // Always register commands if not explicitly disabled
 if (process.env.AUTO_REGISTER !== 'false') {
@@ -59,7 +61,7 @@ client.once('clientReady', () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    if (!interaction.isChatInputCommand() && !interaction.isStringSelectMenu()) return;
+    if (!interaction.isChatInputCommand() && !interaction.isStringSelectMenu() && !interaction.isButton()) return;
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'order') {
       const buyer = interaction.options.getUser('buyer');
@@ -244,7 +246,59 @@ client.on('interactionCreate', async (interaction) => {
   }
 
   if (interaction.isChatInputCommand() && interaction.commandName === 'setup-ticketing') {
+    const embed = new EmbedBuilder()
+      .setColor(0xE3A7FF)
+      .setTitle('Ticketing Booth')
+      .setDescription('Please select a category below to open a ticket.');
+    
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('ticket_order').setLabel('Order').setStyle(ButtonStyle.Primary).setEmoji('🛒'),
+      new ButtonBuilder().setCustomId('ticket_report').setLabel('Report').setStyle(ButtonStyle.Danger).setEmoji('🚨'),
+      new ButtonBuilder().setCustomId('ticket_other').setLabel('Other').setStyle(ButtonStyle.Secondary).setEmoji('❓')
+    );
+
+    await interaction.channel.send({ embeds: [embed], components: [row] });
     await interaction.reply({ content: 'Ticketing booth posted.', ephemeral: true });
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith('ticket_')) {
+    const type = interaction.customId.replace('ticket_', '');
+    const channelName = `${type}-${interaction.user.username}`;
+    
+    // Check if channel already exists (simple check)
+    const existing = interaction.guild.channels.cache.find(c => c.name === channelName);
+    if (existing) {
+        await interaction.reply({ content: `You already have a ticket: ${existing}`, ephemeral: true });
+        return;
+    }
+
+    const channel = await interaction.guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+            { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+            { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
+        ]
+    });
+
+    const embed = new EmbedBuilder()
+        .setColor(0xE3A7FF)
+        .setTitle(`${type.charAt(0).toUpperCase() + type.slice(1)} Ticket`)
+        .setDescription(`Hello ${interaction.user}, support will be with you shortly.\n\n**Category:** ${type}`);
+    
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('close_ticket').setLabel('Close Ticket').setStyle(ButtonStyle.Danger)
+    );
+
+    await channel.send({ content: `${interaction.user}`, embeds: [embed], components: [row] });
+    await interaction.reply({ content: `Ticket created: ${channel}`, ephemeral: true });
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === 'close_ticket') {
+    await interaction.reply({ content: 'Deleting ticket in 5 seconds...' });
+    setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
     return;
   }
 
@@ -449,6 +503,54 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
   }
+
+  if (interaction.isChatInputCommand() && interaction.commandName === 'report') {
+    const user = interaction.options.getUser('user');
+    const reason = interaction.options.getString('reason');
+    const proof = interaction.options.getAttachment('proof');
+
+    const embed = new EmbedBuilder()
+      .setColor(0xFF0000)
+      .setTitle('New Report')
+      .addFields(
+        { name: 'Reporter', value: `${interaction.user}`, inline: true },
+        { name: 'Reported User', value: `${user}`, inline: true },
+        { name: 'Reason', value: reason }
+      )
+      .setTimestamp();
+
+    if (proof) {
+      embed.setImage(proof.url);
+    }
+
+    const channelId = process.env.REPORT_CHANNEL_ID || process.env.ORDER_CHANNEL_ID; // Fallback
+    if (channelId) {
+      const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
+      if (channel) {
+        await channel.send({ embeds: [embed] });
+        await interaction.reply({ content: 'Report submitted successfully.', ephemeral: true });
+        return;
+      }
+    }
+    await interaction.reply({ content: 'Report logged (no report channel configured).', embeds: [embed], ephemeral: true });
+    return;
+  }
+
+  if (interaction.isChatInputCommand() && interaction.commandName === 'backup') {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      await interaction.reply({ content: 'Admin only.', ephemeral: true });
+      return;
+    }
+    const configPath = path.join(process.cwd(), 'data', 'config.json');
+    try {
+      const file = new AttachmentBuilder(configPath, { name: 'config.json' });
+      await interaction.reply({ content: 'Here is the current configuration backup.', files: [file], ephemeral: true });
+    } catch (e) {
+      await interaction.reply({ content: 'Failed to read config file (maybe it does not exist yet).', ephemeral: true });
+    }
+    return;
+  }
+
   } catch (error) {
     console.error('Interaction error:', error);
     if (interaction.isRepliable() && !interaction.replied) {
