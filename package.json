@@ -1,0 +1,16 @@
+{
+  "name": "mdgc-discord-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/bot.js",
+    "register": "node src/register-commands.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "@discordjs/voice": "^0.17.0",
+    "ytdl-core": "^4.11.2"
+  }
+}
